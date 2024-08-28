@@ -1,0 +1,167 @@
+---
+title: "Peer Group Analysis"
+author: "Sarah Blackstone & Stephanie Stevens"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+
+##install.packages("tidyverse")
+##install.packages("readxl")
+
+
+library(tidyverse)
+library(readxl)
+```
+
+# Prepare the Data
+
+```{r}
+## read in excel file with output from SQL Server
+dat <- read_excel("N:/OP/OIR/OIR-Common/ADS Projects/IPEDS Peer Comparisons/Task Force Demo Apr 2024/knn_data.xlsx") #file path
+
+
+#pull Institution names into an object (needed later)
+names <- dat[,1] 
+
+#remove names of institutions to exclude from analysis
+dat <- dat %>% select(-instnm) #update with institution variable name
+
+#scale data
+dat <- as.data.frame(scale(dat))
+
+#add already determined weight values by variable
+
+ weighted_data <- dat %>%
+ 		mutate(rd_expend = rd_expend * 13.91,
+ 		percent_ug = percent_ug * 13.77,
+ 		total_enrollment = total_enrollment * 12.3, 
+ 		inst_faculty_fte = inst_faculty_fte * 10.94,
+ 		grad_rate = grad_rate * 9.15,
+   	public_funding_per_fte = public_funding_per_fte * 11.62,
+    percent_ft_inst_fac = percent_ft_inst_fac * 10.87,
+    percent_ft_ug = percent_ft_ug * 9,
+    percent_ug_pell = percent_ug_pell * 7.45,
+ 			)
+```
+
+# Distance Matrix
+We are going to create a distance matrix showing the cumulative distance between each school. We can extract the first column, which will correspond to the first school listed in the original dataframe (JMU).
+
+```{r}
+
+#create a distance matrix of all variables
+jmu_dist <- as.matrix(dist(weighted_data[, c(1:9)])) 
+
+#extract the first column (which is JMU)
+jmu_dist <- as.data.frame(jmu_dist[1, ]) 
+
+#create a variable reflecting row index
+jmu_dist <- jmu_dist %>% mutate(index = row_number()) 
+
+#add a row number to the names file; we will use this to merge the institution names with the index and distance data
+names <- names %>% mutate(rn = row_number()) 
+
+#join the institution names with the distance matrix
+peer_group <- jmu_dist %>% left_join(names, by = c("index" = "rn")) 
+
+#order by overall distance to see the "nearest neighbors"
+peer_group <- peer_group %>% arrange(`jmu_dist[1, ]`) 
+
+#export
+write_csv(peer_group, "Institutions Ranked for Peer Group.csv")
+```
+
+# Data for Visualization
+We need to select the top n "neighbors" to create distances summaries for each variable to display in the radar plots.
+```{r}
+
+
+#select the 20 nearest neighbors plus JMU, which is row 1
+top_withJMU <- peer_group[c(1:21), ] 
+
+#add row index to the original weighted data frame
+weighted_data <-weighted_data %>% mutate(rn = row_number()) 
+
+#select the data for all variables from the weighted data frame for the observations in the top20
+data_for_radar <- weighted_data %>% filter(rn %in% top_withJMU$index) 
+
+#join this data frame with top 20 dataframe containing overall distance, index and institution name.
+data_for_radar <- data_for_radar %>% left_join(top_withJMU, by = c("rn" = "index")) 
+
+#select the institution name- this was we have the names stored in an object in the order they appear in the data we are using for variable group distances
+top20names_withJMU <- data_for_radar$instnm  
+
+
+```
+
+## Distances for Individual Variables (for Radar Plot)
+
+Apply the following function to each variable in the data_for_radar df, updating the column indicies and the variable name each time
+```{r}
+fun <- function(df, cols) {
+  groupname <- as.data.frame(as.matrix(dist(df[, cols])))
+  groupname <-  groupname[, 1]
+  as.data.frame(groupname)
+}
+
+##Examples from JMU peer group analysis variables - change variable name and group name to fit your needs
+rd_expend <- fun(data_for_radar, c(1:1))
+rd_expend <- rd_expend %>% rename(`R&D Expenditures` = groupname)
+
+
+percent_ug <- fun(data_for_radar, c(2:2))
+percent_ug <- percent_ug %>% rename(`Percent of Undergrad` = groupname)
+
+total_enrollment <- fun(data_for_radar, c(3:3))
+total_enrollment <- total_enrollment %>% rename(`Total Enrollment` = groupname)
+
+inst_faculty_fte <- fun(data_for_radar, c(4:4))
+inst_faculty_fte <- inst_faculty_fte %>% rename(`Instructional Faculty FTE` = groupname)
+
+grad_rate <- fun(data_for_radar, c(5:5))
+grad_rate <- grad_rate %>% rename(`Graduation Rate` = groupname)
+
+public_funding_per_fte <- fun(data_for_radar, c(6:6))
+public_funding_per_fte <- public_funding_per_fte %>% rename(`Public Funding per FTE` = groupname)
+
+percent_ft_inst_fac <- fun(data_for_radar, c(7:7))
+percent_ft_inst_fac <- percent_ft_inst_fac %>% rename(`Percent of FT Inst Faculty` = groupname)
+
+percent_ft_ug <- fun(data_for_radar, c(8:8))
+percent_ft_ug <- percent_ft_ug %>% rename(`Percent of FT Undergrad` = groupname)
+
+percent_ug_pell <- fun(data_for_radar, c(9:9))
+percent_ug_pell <- percent_ug_pell %>% rename(`Percent of Pell Students` = groupname)
+```
+
+
+Bind the data frames together with the list of the top 20 names.
+
+```{r}
+final_data <- cbind(rd_expend, percent_ug, total_enrollment, inst_faculty_fte,grad_rate,public_funding_per_fte, percent_ft_inst_fac, percent_ft_ug,percent_ug_pell,  top20names_withJMU)
+
+final_data <- final_data[c(2:21), ] #remove JMU from the list
+```
+
+# Reshape and export data
+```{r}
+
+## first variable : last variable
+final_data <- final_data %>% 
+  pivot_longer(`R&D Expenditures`:`Percent of Pell Students`, names_to = "Variable", values_to = "Distance")
+
+write_csv(final_data, "Data Radar Plots TEST.csv")
+
+
+```
+
+
+
+
